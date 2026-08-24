@@ -33,7 +33,7 @@ Connect the Waveshare board by USB and run:
 RUN_FIX_AND_FLASH.bat
 ```
 
-The default serial-port mode is now **AUTO**. Before flashing, the script safely probes all visible COM ports with Espressif `esptool chip-id`, selects the single port that identifies itself as **ESP32-S3**, and refuses to flash ESP32, ESP32-C3, or other chips by mistake.
+The launcher does **not** hardcode COM9 or any other port. With no argument it lets `FIX_AND_FLASH.ps1` use its default **AUTO** mode. Before flashing, the script safely probes all visible COM ports with Espressif `esptool chip-id`, selects the single port that identifies itself as **ESP32-S3**, and refuses to flash ESP32, ESP32-C3, or other chips by mistake.
 
 The PowerShell automation:
 
@@ -53,10 +53,16 @@ The PowerShell automation:
 
 The globally installed Arduino libraries are not modified.
 
-To force a specific port instead of AUTO:
+To force a specific port instead of AUTO, either run:
 
 ```powershell
 .\FIX_AND_FLASH.ps1 -Port COM8
+```
+
+or:
+
+```text
+RUN_FIX_AND_FLASH.bat COM8
 ```
 
 The explicit port is still verified as an ESP32-S3 before flashing.
@@ -75,7 +81,7 @@ Run:
 PULL_AND_FLASH.bat
 ```
 
-It performs `git pull --ff-only` first and only flashes if the update succeeded.
+It performs `git pull --ff-only` first and then runs automatic ESP32-S3 detection. You can optionally use `PULL_AND_FLASH.bat COM8` to request a particular port, which will still be chip-verified before flashing.
 
 ## Google Apps Script
 
