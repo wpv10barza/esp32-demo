@@ -39,13 +39,18 @@ The PowerShell automation:
 
 - uses an existing `arduino-cli`, or downloads a portable official copy into `.tools/`;
 - uses Espressif's official package index;
-- pins ESP32 Arduino Core `3.3.10`;
-- pins `GFX Library for Arduino` `1.6.4`;
+- pins ESP32 Arduino Core `3.3.11`, matching Waveshare's current Arduino CI;
+- downloads and verifies Waveshare's patched `GFX Library for Arduino 1.6.4` from pinned upstream revision `225a62b`;
+- forces that exact GFX library with Arduino CLI `--library`, so an older Library Manager copy cannot win dependency resolution;
+- builds from a safe temporary path without parentheses, avoiding ESP32 Windows `cmd.exe` recipe failures;
 - compiles for `esp32:esp32:esp32s3`;
 - uses `CDCOnBoot=cdc,FlashSize=16M,PSRAM=opi`;
 - verifies the COM port;
 - stops on the first real error;
-- uploads only after a successful compile.
+- uploads only after a successful compile;
+- removes the temporary sketch containing `secrets.h` after success or failure.
+
+The globally installed Arduino libraries are not modified.
 
 If the board is not on COM9:
 
