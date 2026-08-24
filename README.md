@@ -10,6 +10,36 @@ The ESP32 displays the next timed event from Google Calendar and a live `HH:MM:S
 
 This deliberately keeps Google OAuth off the microcontroller.
 
+## Diagnóstico confirmado de COM10
+
+La salida real de `esptool chip-id` identifica `COM10` como:
+
+```text
+USB-SERIAL CH340 (COM10)
+Chip type: ESP32-D0WD-V3 (revision v3.1)
+```
+
+Ese chip es un **ESP32 clásico**, no el ESP32-S3 de la pantalla
+Waveshare ESP32-S3-Touch-AMOLED-2.16. Por tanto, seleccionar `ESP32 Dev Module`
+o cambiar únicamente el FQBN no es una corrección válida: este sketch necesita
+los pines QSPI, 16 MB de flash y PSRAM OPI del hardware S3.
+
+Para volver a identificar todas las placas conectadas sin compilar ni cargar:
+
+```text
+IDENTIFY_BOARD.bat
+```
+
+o desde PowerShell:
+
+```powershell
+.\FIX_AND_FLASH.ps1 -IdentifyOnly
+```
+
+El programa muestra el modelo exacto encontrado. Si solo aparece
+`ESP32-D0WD-V3`, se detiene sin modificarlo. Para cargar esta aplicación debe
+conectarse una placa cuyo `chip-id` indique explícitamente `ESP32-S3`.
+
 ## Security-first repository layout
 
 Credentials are **not committed**.
@@ -39,24 +69,21 @@ The Waveshare ESP32-S3-Touch-AMOLED-2.16 uses the **native USB interface of the 
 - ignores Bluetooth virtual COM ports;
 - labels CH340/CH341 ports as non-target interfaces for this specific board;
 - looks for Espressif native USB devices (`VID_303A`);
-- if no native USB device is visible, prints the official Waveshare BOOT reconnect sequence and waits up to 45 seconds for the board to enumerate;
+- if no native USB device is visible, prints the BOOT reconnect sequence and waits up to 45 seconds for the board to enumerate;
 - only after a native USB candidate appears does it call `FIX_AND_FLASH.ps1`;
-- `FIX_AND_FLASH.ps1` then independently verifies the selected port with `esptool chip-id` and refuses to flash unless the chip is **ESP32-S3**.
-
-A port such as `USB-SERIAL CH340` that identifies as `ESP32-D0WD-V3` is an ESP32 classic and is **not** the Waveshare ESP32-S3 target.
+- `FIX_AND_FLASH.ps1` then independently verifies the selected port with `esptool chip-id` before compiling and refuses to flash unless the chip is **ESP32-S3**.
 
 ### If Windows does not show the Waveshare
-
-Use Waveshare's USB BOOT procedure:
 
 1. Use a USB-C cable that supports **data**, not charging only.
 2. Disconnect the board USB-C from the PC.
 3. Hold the **BOOT** button.
 4. While holding BOOT, connect the USB-C cable to the PC.
 5. Release BOOT.
-6. Leave `RUN_FIX_AND_FLASH.bat` running; it scans for the new native USB device for 45 seconds.
+6. Leave `RUN_FIX_AND_FLASH.bat` running while it scans for native USB.
 
-If it still does not enumerate, try a known-good data cable and a different direct USB port on the PC without a hub.
+If it still does not enumerate, try a known-good data cable and a direct USB
+port without a hub.
 
 ## Build environment
 
@@ -70,7 +97,10 @@ The PowerShell automation:
 - builds from a safe temporary path without parentheses;
 - compiles for `esp32:esp32:esp32s3`;
 - uses `CDCOnBoot=cdc,FlashSize=16M,PSRAM=opi`;
+- verifies the real ESP32-S3 serial port before downloading GFX, compiling or uploading;
+- refuses to flash any other ESP32 family;
 - stops on the first real error;
+- uploads only after a successful compile;
 - removes the temporary sketch containing `secrets.h` after success or failure.
 
 The globally installed Arduino libraries are not modified.
@@ -82,6 +112,10 @@ RUN_FIX_AND_FLASH.bat COM12
 ```
 
 The explicit port is still verified as an ESP32-S3 before flashing.
+
+Para el equipo actualmente visto en `COM10`, el resultado correcto y seguro es
+un rechazo antes de compilar, indicando `ESP32-D0WD-V3`. No fuerce ese puerto
+para este firmware.
 
 Compile without uploading:
 
