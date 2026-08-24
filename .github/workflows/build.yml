@@ -65,6 +65,10 @@ jobs:
           grep -q 'esp32:esp32:esp32s3' FIX_AND_FLASH.ps1
           grep -q 'VID_303A' WAVESHARE_USB_BOOT.ps1
           grep -q 'VID_1A86' WAVESHARE_USB_BOOT.ps1
+          grep -q 'CONFIG_IDF_TARGET_ESP32S3' Waveshare_Next_Meeting.ino
+          grep -q 'WAVESHARE_HARDWARE_GUARD' Waveshare_Next_Meeting.ino
+          grep -q 'getFlashChipSize' Waveshare_Next_Meeting.ino
+          grep -q 'psramFound' Waveshare_Next_Meeting.ino
           echo 'Windows launchers use native USB detection and preserve the ESP32-S3 target'
 
       - name: Validate Waveshare hardware profile
@@ -119,7 +123,7 @@ jobs:
           #define CALENDAR_URL_VALUE "https://example.invalid/exec"
           EOF
 
-      - name: Compile firmware
+      - name: Compile ESP32-S3 firmware (must succeed)
         run: |
           arduino-cli compile \
             --fqbn esp32:esp32:esp32s3 \
@@ -127,3 +131,24 @@ jobs:
             --library "$GFX_DIR" \
             --warnings all \
             /tmp/Waveshare_Next_Meeting
+
+      - name: Compile as classic ESP32 (must be rejected)
+        shell: bash
+        run: |
+          set +e
+          arduino-cli compile \
+            --fqbn esp32:esp32:esp32 \
+            --library "$GFX_DIR" \
+            --warnings all \
+            /tmp/Waveshare_Next_Meeting \
+            > /tmp/classic-esp32-build.log 2>&1
+          status=$?
+          set -e
+
+          cat /tmp/classic-esp32-build.log
+          if [[ $status -eq 0 ]]; then
+            echo 'Classic ESP32 compiled unexpectedly; hardware guard failed' >&2
+            exit 1
+          fi
+          grep -q 'WAVESHARE_HARDWARE_GUARD' /tmp/classic-esp32-build.log
+          echo 'Classic ESP32 correctly rejected by the compile-time hardware guard'
