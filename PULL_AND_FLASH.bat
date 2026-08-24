@@ -33,5 +33,7 @@ if errorlevel 1 (
 
 echo.
 echo [2/2] Compilando y cargando...
-call "%~dp0RUN_FIX_AND_FLASH.bat"
+rem No argument = automatic ESP32-S3 detection.
+rem Optional override: PULL_AND_FLASH.bat COM8
+call "%~dp0RUN_FIX_AND_FLASH.bat" %*
 exit /b %ERRORLEVEL%
