@@ -4,13 +4,13 @@ cd /d "%~dp0"
 
 echo ============================================
 echo  WAVESHARE HARDWARE IDENTIFICATION - SAFE
- echo ============================================
+echo ============================================
 echo.
 echo Expected target : ESP32-S3 / ESP32-S3R8 / 16 MB flash / 8 MB PSRAM
- echo This command DOES NOT flash firmware.
+echo This command DOES NOT compile or flash firmware.
 echo.
 
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0FIX_AND_FLASH.ps1" -IdentifyOnly
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0IDENTIFY_HARDWARE.ps1"
 
 set EXITCODE=%ERRORLEVEL%
 echo.
