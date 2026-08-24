@@ -9,15 +9,21 @@ $ProgressPreference = "SilentlyContinue"
 
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Fqbn = "esp32:esp32:esp32s3"
-$Esp32Core = "esp32:esp32@3.3.10"
-$GfxLibrary = "GFX Library for Arduino@1.6.4"
+$Esp32Core = "esp32:esp32@3.3.11"
 $EspressifIndex = "https://espressif.github.io/arduino-esp32/package_esp32_index.json"
 $BoardOptions = "CDCOnBoot=cdc,FlashSize=16M,PSRAM=opi"
 $CanonicalSketchName = "Waveshare_Next_Meeting.ino"
 
+# Waveshare's repository carries a patched GFX 1.6.4 that is newer than the
+# Library Manager copy with the same version number. Pin the exact upstream
+# revision currently used by Waveshare so builds are reproducible.
+$WaveshareCommit = "225a62bff11b5d0a0b607873860d39485a9a9685"
+$WaveshareArchiveUrl = "https://github.com/waveshareteam/ESP32-S3-Touch-AMOLED-2.16/archive/$WaveshareCommit.zip"
+
 $SafeWorkspace = $null
 $SafeSketchRoot = $null
 $BuildPath = $null
+$VendorGfxRoot = $null
 
 function Write-Step([string]$Message) {
     Write-Host "`n==> $Message" -ForegroundColor Cyan
@@ -49,9 +55,8 @@ function Test-WritableDirectory([string]$Path) {
 }
 
 function Get-SafeWorkspaceRoot {
-    # ESP32's Windows platform recipes contain cmd.exe IF/ELSE expressions.
-    # Parentheses in the sketch path can break those recipes even when quoted.
-    # Prefer a user-private path, but reject every candidate containing ( or ).
+    # ESP32 Windows recipes invoke cmd.exe internally. Parentheses in paths can
+    # break IF/ELSE recipes even when the caller quotes the sketch path.
     $candidates = @()
 
     if ($env:LOCALAPPDATA) {
@@ -65,25 +70,148 @@ function Get-SafeWorkspaceRoot {
     }
 
     foreach ($candidate in $candidates) {
-        if ($candidate -match '[()]') {
-            continue
+        if ($candidate -match '[()]') { continue }
+        if (Test-WritableDirectory $candidate) { return $candidate }
+    }
+
+    Fail "No se encontro una ruta temporal escribible sin parentesis."
+}
+
+function Ensure-ArduinoCli {
+    Write-Step "Localizando Arduino CLI"
+
+    $cmd = Get-Command arduino-cli -ErrorAction SilentlyContinue
+    if ($cmd) {
+        $script:ArduinoCli = $cmd.Source
+        Write-Host "Usando Arduino CLI existente: $script:ArduinoCli" -ForegroundColor Green
+        Run-Cli @("version")
+        return
+    }
+
+    $ToolDir = Join-Path $Root ".tools\arduino-cli"
+    $script:ArduinoCli = Join-Path $ToolDir "arduino-cli.exe"
+
+    if (-not (Test-Path $script:ArduinoCli)) {
+        Write-Host "Arduino CLI no esta en PATH. Instalando copia portable oficial..." -ForegroundColor Yellow
+        New-Item -ItemType Directory -Force -Path $ToolDir | Out-Null
+
+        if ([Environment]::Is64BitOperatingSystem) {
+            $CliUrl = "https://downloads.arduino.cc/arduino-cli/arduino-cli_latest_Windows_64bit.zip"
         }
-        if (Test-WritableDirectory $candidate) {
-            return $candidate
+        else {
+            $CliUrl = "https://downloads.arduino.cc/arduino-cli/arduino-cli_latest_Windows_32bit.zip"
+        }
+
+        $ZipPath = Join-Path $env:TEMP ("arduino-cli-" + [guid]::NewGuid().ToString("N") + ".zip")
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri $CliUrl -OutFile $ZipPath
+            Expand-Archive -Path $ZipPath -DestinationPath $ToolDir -Force
+        }
+        finally {
+            if (Test-Path $ZipPath) {
+                Remove-Item -LiteralPath $ZipPath -Force -ErrorAction SilentlyContinue
+            }
         }
     }
 
-    Fail "No se encontro una ruta temporal escribible sin parentesis. Renombra/mueve el proyecto a una ruta sin ( ) o configura TEMP a una ruta simple."
+    if (-not (Test-Path $script:ArduinoCli)) {
+        Fail "No se pudo instalar arduino-cli.exe en $ToolDir"
+    }
+
+    Write-Host "Arduino CLI portable listo: $script:ArduinoCli" -ForegroundColor Green
+    Run-Cli @("version")
+}
+
+function Test-WaveshareGfxPatch([string]$GfxRoot) {
+    $SpiFile = Join-Path $GfxRoot "src\databus\Arduino_ESP32SPI.cpp"
+    $QspiFile = Join-Path $GfxRoot "src\databus\Arduino_ESP32QSPI.cpp"
+    $Props = Join-Path $GfxRoot "library.properties"
+
+    if (-not (Test-Path $SpiFile) -or -not (Test-Path $QspiFile) -or -not (Test-Path $Props)) {
+        return $false
+    }
+
+    $SpiText = Get-Content -LiteralPath $SpiFile -Raw
+    $PropsText = Get-Content -LiteralPath $Props -Raw
+
+    return (
+        $SpiText.Contains("gfxSpiFrequencyToClockDiv") -and
+        $SpiText.Contains("spiFrequencyToClockDiv(spi, freq)") -and
+        $PropsText.Contains("version=1.6.4")
+    )
+}
+
+function Ensure-WavesharePatchedGfx {
+    Write-Step "Preparando GFX oficial parcheada por Waveshare"
+
+    if (-not $script:SafeWorkspace) {
+        $script:SafeWorkspace = Get-SafeWorkspaceRoot
+    }
+
+    $VendorRoot = Join-Path $script:SafeWorkspace ("vendor\" + $WaveshareCommit)
+    $script:VendorGfxRoot = Join-Path $VendorRoot "GFX_Library_for_Arduino"
+
+    if (Test-WaveshareGfxPatch $script:VendorGfxRoot) {
+        Write-Host "GFX Waveshare cacheada y verificada: $script:VendorGfxRoot" -ForegroundColor Green
+        return
+    }
+
+    if (Test-Path $VendorRoot) {
+        Remove-Item -LiteralPath $VendorRoot -Recurse -Force
+    }
+    New-Item -ItemType Directory -Force -Path $VendorRoot | Out-Null
+
+    $DownloadZip = Join-Path $script:SafeWorkspace ("waveshare-" + [guid]::NewGuid().ToString("N") + ".zip")
+    $ExtractRoot = Join-Path $script:SafeWorkspace ("waveshare-extract-" + [guid]::NewGuid().ToString("N"))
+
+    try {
+        Write-Host "Descargando revision oficial Waveshare $WaveshareCommit..." -ForegroundColor DarkGray
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Invoke-WebRequest -Uri $WaveshareArchiveUrl -OutFile $DownloadZip
+
+        New-Item -ItemType Directory -Force -Path $ExtractRoot | Out-Null
+        Expand-Archive -LiteralPath $DownloadZip -DestinationPath $ExtractRoot -Force
+
+        $RepoRoot = Get-ChildItem -LiteralPath $ExtractRoot -Directory | Select-Object -First 1
+        if (-not $RepoRoot) {
+            Fail "El ZIP oficial de Waveshare no contiene una carpeta raiz valida."
+        }
+
+        $SourceGfx = Join-Path $RepoRoot.FullName "examples\arduino\libraries\GFX_Library_for_Arduino"
+        if (-not (Test-WaveshareGfxPatch $SourceGfx)) {
+            Fail "La copia GFX descargada de Waveshare no contiene el parche esperado para ESP32 >= 3.3.0."
+        }
+
+        Copy-Item -LiteralPath $SourceGfx -Destination $script:VendorGfxRoot -Recurse -Force
+
+        if (-not (Test-WaveshareGfxPatch $script:VendorGfxRoot)) {
+            Fail "No se pudo validar la copia GFX vendorizada despues de copiarla."
+        }
+    }
+    finally {
+        if (Test-Path $DownloadZip) {
+            Remove-Item -LiteralPath $DownloadZip -Force -ErrorAction SilentlyContinue
+        }
+        if (Test-Path $ExtractRoot) {
+            Remove-Item -LiteralPath $ExtractRoot -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    Write-Host "GFX Waveshare lista: $script:VendorGfxRoot" -ForegroundColor Green
+    Write-Host "La GFX global de Documents\Arduino NO sera modificada." -ForegroundColor DarkGray
 }
 
 function Prepare-SafeSketch([string]$SecretsPath) {
     Write-Step "Preparando copia temporal segura para ESP32 en Windows"
 
-    $script:SafeWorkspace = Get-SafeWorkspaceRoot
+    if (-not $script:SafeWorkspace) {
+        $script:SafeWorkspace = Get-SafeWorkspaceRoot
+    }
+
     $script:SafeSketchRoot = Join-Path $script:SafeWorkspace "Waveshare_Next_Meeting"
     $script:BuildPath = Join-Path $script:SafeWorkspace "build"
 
-    # Eliminate stale source/binaries before every build.
     if (Test-Path $script:SafeSketchRoot) {
         Remove-Item -LiteralPath $script:SafeSketchRoot -Recurse -Force
     }
@@ -94,41 +222,40 @@ function Prepare-SafeSketch([string]$SecretsPath) {
     New-Item -ItemType Directory -Force -Path $script:SafeSketchRoot | Out-Null
     New-Item -ItemType Directory -Force -Path $script:BuildPath | Out-Null
 
-    $sourceSketch = Join-Path $Root $CanonicalSketchName
-    $legacySketch = Join-Path $Root "Calendar_Countdown.ino"
-    $targetSketch = Join-Path $script:SafeSketchRoot $CanonicalSketchName
+    $SourceSketch = Join-Path $Root $CanonicalSketchName
+    $LegacySketch = Join-Path $Root "Calendar_Countdown.ino"
+    $TargetSketch = Join-Path $script:SafeSketchRoot $CanonicalSketchName
 
-    if (Test-Path $sourceSketch) {
-        Copy-Item -LiteralPath $sourceSketch -Destination $targetSketch -Force
+    if (Test-Path $SourceSketch) {
+        Copy-Item -LiteralPath $SourceSketch -Destination $TargetSketch -Force
     }
-    elseif (Test-Path $legacySketch) {
-        Copy-Item -LiteralPath $legacySketch -Destination $targetSketch -Force
+    elseif (Test-Path $LegacySketch) {
+        Copy-Item -LiteralPath $LegacySketch -Destination $TargetSketch -Force
     }
     else {
         Fail "No se encontro $CanonicalSketchName ni Calendar_Countdown.ino en $Root"
     }
 
-    # Copy auxiliary sketch source files. The canonical/legacy .ino is handled above.
-    $sourceExtensions = @('.h', '.hpp', '.c', '.cpp', '.S', '.s')
+    $SourceExtensions = @('.h', '.hpp', '.c', '.cpp', '.S', '.s')
     Get-ChildItem -LiteralPath $Root -File | Where-Object {
-        $sourceExtensions -contains $_.Extension -and
+        $SourceExtensions -contains $_.Extension -and
         $_.Name -ne 'secrets.h' -and
         $_.Name -ne 'secrets.example.h'
     } | ForEach-Object {
         Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $script:SafeSketchRoot $_.Name) -Force
     }
 
-    # secrets.h is intentionally copied only into the temporary build source and
-    # is removed in finally{} after success or failure.
+    # secrets.h is copied only into the temporary sketch and deleted in finally{}.
     Copy-Item -LiteralPath $SecretsPath -Destination (Join-Path $script:SafeSketchRoot "secrets.h") -Force
 
     if ($script:SafeSketchRoot -match '[()]' -or $script:BuildPath -match '[()]') {
-        Fail "Error interno: la ruta temporal segura todavia contiene parentesis."
+        Fail "Error interno: la ruta temporal segura contiene parentesis."
     }
 
     Write-Host "Proyecto original : $Root" -ForegroundColor DarkGray
     Write-Host "Sketch temporal   : $script:SafeSketchRoot" -ForegroundColor Green
     Write-Host "Build temporal    : $script:BuildPath" -ForegroundColor Green
+    Write-Host "GFX forzada       : $script:VendorGfxRoot" -ForegroundColor Green
 }
 
 try {
@@ -140,7 +267,7 @@ try {
         if (-not (Test-Path $SecretsExample)) {
             Fail "No existe secrets.example.h"
         }
-        Copy-Item $SecretsExample $Secrets
+        Copy-Item -LiteralPath $SecretsExample -Destination $Secrets
         Write-Host "Se creo secrets.h localmente." -ForegroundColor Yellow
         Write-Host "Edita secrets.h con tu Wi-Fi y CALENDAR_URL y vuelve a ejecutar." -ForegroundColor Yellow
         exit 2
@@ -155,56 +282,18 @@ try {
         exit 2
     }
 
-    Write-Step "Localizando Arduino CLI"
-
-    $cmd = Get-Command arduino-cli -ErrorAction SilentlyContinue
-    if ($cmd) {
-        $script:ArduinoCli = $cmd.Source
-        Write-Host "Usando Arduino CLI existente: $script:ArduinoCli" -ForegroundColor Green
-    }
-    else {
-        $ToolDir = Join-Path $Root ".tools\arduino-cli"
-        $script:ArduinoCli = Join-Path $ToolDir "arduino-cli.exe"
-
-        if (-not (Test-Path $script:ArduinoCli)) {
-            Write-Host "Arduino CLI no esta instalado en PATH. Instalando copia portable oficial..." -ForegroundColor Yellow
-            New-Item -ItemType Directory -Force -Path $ToolDir | Out-Null
-
-            if ([Environment]::Is64BitOperatingSystem) {
-                $CliUrl = "https://downloads.arduino.cc/arduino-cli/arduino-cli_latest_Windows_64bit.zip"
-            }
-            else {
-                $CliUrl = "https://downloads.arduino.cc/arduino-cli/arduino-cli_latest_Windows_32bit.zip"
-            }
-
-            $ZipPath = Join-Path $env:TEMP ("arduino-cli-" + [guid]::NewGuid().ToString("N") + ".zip")
-            try {
-                [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-                Invoke-WebRequest -Uri $CliUrl -OutFile $ZipPath
-                Expand-Archive -Path $ZipPath -DestinationPath $ToolDir -Force
-            }
-            finally {
-                if (Test-Path $ZipPath) { Remove-Item $ZipPath -Force -ErrorAction SilentlyContinue }
-            }
-        }
-
-        if (-not (Test-Path $script:ArduinoCli)) {
-            Fail "No se pudo instalar arduino-cli.exe en $ToolDir"
-        }
-        Write-Host "Arduino CLI portable listo: $script:ArduinoCli" -ForegroundColor Green
-    }
-
-    Run-Cli @("version")
+    Ensure-ArduinoCli
 
     Write-Step "Actualizando indices oficiales"
     Run-Cli @("core", "update-index", "--additional-urls", $EspressifIndex)
     Run-Cli @("lib", "update-index")
 
-    Write-Step "Instalando ESP32 Arduino Core 3.3.10"
+    Write-Step "Instalando ESP32 Arduino Core 3.3.11"
     Run-Cli @("core", "install", $Esp32Core, "--additional-urls", $EspressifIndex)
 
-    Write-Step "Instalando GFX Library for Arduino 1.6.4"
-    Run-Cli @("lib", "install", $GfxLibrary)
+    # Do not install GFX from Library Manager. Waveshare's patched copy has the
+    # same 1.6.4 version string but contains ESP32 3.3.x compatibility changes.
+    Ensure-WavesharePatchedGfx
 
     Write-Step "Validando estructura del sketch"
     $CanonicalSketch = Join-Path $Root $CanonicalSketchName
@@ -224,6 +313,8 @@ try {
         "--fqbn", $Fqbn,
         "--board-options", $BoardOptions,
         "--build-path", $BuildPath,
+        "--library", $VendorGfxRoot,
+        "--clean",
         "--warnings", "all",
         $SafeSketchRoot
     )
@@ -268,8 +359,8 @@ catch {
     exit 1
 }
 finally {
-    # The staged copy contains secrets.h and build binaries, so remove it even
-    # when compilation/upload fails. Never touch the original repository files.
+    # The temporary sketch contains secrets.h. Remove it after success/failure.
+    # Keep the verified Waveshare GFX cache to make subsequent builds fast.
     if ($SafeSketchRoot -and (Test-Path $SafeSketchRoot)) {
         Remove-Item -LiteralPath $SafeSketchRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
