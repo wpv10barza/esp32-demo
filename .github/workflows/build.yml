@@ -54,17 +54,31 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if grep -Eqi 'set[[:space:]]+PORT=COM[0-9]+|-Port[[:space:]]+COM[0-9]+' RUN_FIX_AND_FLASH.bat PULL_AND_FLASH.bat IDENTIFY_BOARD.bat; then
+          if grep -Eqi 'set[[:space:]]+PORT=COM[0-9]+|-Port[[:space:]]+COM[0-9]+' RUN_FIX_AND_FLASH.bat PULL_AND_FLASH.bat IDENTIFY_BOARD.bat IDENTIFY_HARDWARE.bat; then
             echo 'A Windows launcher hardcodes a COM port' >&2
             exit 1
           fi
           grep -q 'WAVESHARE_USB_BOOT.ps1' RUN_FIX_AND_FLASH.bat
           grep -q 'RUN_FIX_AND_FLASH.bat' PULL_AND_FLASH.bat
           grep -q -- '-IdentifyOnly' IDENTIFY_BOARD.bat
+          grep -q -- '-IdentifyOnly' IDENTIFY_HARDWARE.bat
           grep -q 'esp32:esp32:esp32s3' FIX_AND_FLASH.ps1
           grep -q 'VID_303A' WAVESHARE_USB_BOOT.ps1
           grep -q 'VID_1A86' WAVESHARE_USB_BOOT.ps1
           echo 'Windows launchers use native USB detection and preserve the ESP32-S3 target'
+
+      - name: Validate Waveshare hardware profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q 'ESP32-S3R8' HARDWARE_PROFILE.md
+          grep -q '8 MB embedded PSRAM' HARDWARE_PROFILE.md
+          grep -q '16 MB' HARDWARE_PROFILE.md
+          grep -q 'ESP32-D0WD-V3' HARDWARE_PROFILE.md
+          grep -q 'USB-SERIAL CH340' HARDWARE_PROFILE.md
+          grep -q 'must never be treated as an ESP32-S3 target' HARDWARE_PROFILE.md
+          grep -q 'FlashSize=16M,PSRAM=opi' HARDWARE_PROFILE.md
+          echo 'Hardware profile rejects classic ESP32/CH340 and preserves S3R8 requirements'
 
       - name: Install Arduino CLI
         uses: arduino/setup-arduino-cli@v2
