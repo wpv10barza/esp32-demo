@@ -29,6 +29,17 @@ jobs:
           if ($flasher -notmatch '\[string\]\$Port\s*=\s*"AUTO"') {
             throw 'FIX_AND_FLASH.ps1 must default to Port=AUTO'
           }
+          if ($flasher -notmatch '\[switch\]\$IdentifyOnly') {
+            throw 'FIX_AND_FLASH.ps1 must provide the safe IdentifyOnly mode'
+          }
+          $preflight = $flasher.IndexOf('$ResolvedPort = Resolve-Esp32S3Port')
+          $compile = $flasher.IndexOf('Write-Step "Compilando para Waveshare ESP32-S3"')
+          if ($preflight -lt 0 -or $compile -lt 0 -or $preflight -gt $compile) {
+            throw 'Physical ESP32-S3 validation must happen before firmware compilation'
+          }
+          if ($flasher -notmatch 'ESP32-D0WD-V3') {
+            throw 'Classic ESP32 incompatibility must be explicit'
+          }
 
           $usbHelper = Get-Content -LiteralPath ./WAVESHARE_USB_BOOT.ps1 -Raw
           foreach ($required in @('VID_303A', 'CH340', 'Bluetooth', 'BOOT', 'FIX_AND_FLASH.ps1')) {
@@ -37,19 +48,23 @@ jobs:
             }
           }
 
+          Write-Host "PowerShell syntax, native USB routing and chip preflight OK"
+
       - name: Validate Windows launchers and native USB routing
         shell: bash
         run: |
           set -euo pipefail
-          if grep -Eqi 'set[[:space:]]+PORT=COM9|-Port[[:space:]]+COM9' RUN_FIX_AND_FLASH.bat PULL_AND_FLASH.bat; then
-            echo 'A Windows launcher still hardcodes COM9' >&2
+          if grep -Eqi 'set[[:space:]]+PORT=COM[0-9]+|-Port[[:space:]]+COM[0-9]+' RUN_FIX_AND_FLASH.bat PULL_AND_FLASH.bat IDENTIFY_BOARD.bat; then
+            echo 'A Windows launcher hardcodes a COM port' >&2
             exit 1
           fi
           grep -q 'WAVESHARE_USB_BOOT.ps1' RUN_FIX_AND_FLASH.bat
           grep -q 'RUN_FIX_AND_FLASH.bat' PULL_AND_FLASH.bat
+          grep -q -- '-IdentifyOnly' IDENTIFY_BOARD.bat
+          grep -q 'esp32:esp32:esp32s3' FIX_AND_FLASH.ps1
           grep -q 'VID_303A' WAVESHARE_USB_BOOT.ps1
           grep -q 'VID_1A86' WAVESHARE_USB_BOOT.ps1
-          echo 'Windows launcher routes through Waveshare native USB detection'
+          echo 'Windows launchers use native USB detection and preserve the ESP32-S3 target'
 
       - name: Install Arduino CLI
         uses: arduino/setup-arduino-cli@v2

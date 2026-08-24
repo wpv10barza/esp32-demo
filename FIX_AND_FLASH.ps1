@@ -1,6 +1,7 @@
 param(
     [string]$Port = "AUTO",
-    [switch]$CompileOnly
+    [switch]$CompileOnly,
+    [switch]$IdentifyOnly
 )
 
 Set-StrictMode -Version Latest
@@ -24,6 +25,7 @@ $SafeWorkspace = $null
 $SafeSketchRoot = $null
 $BuildPath = $null
 $VendorGfxRoot = $null
+$ResolvedPort = $null
 
 function Write-Step([string]$Message) {
     Write-Host "`n==> $Message" -ForegroundColor Cyan
@@ -178,16 +180,22 @@ function Probe-EspChip([string]$EsptoolPath, [string]$CandidatePort) {
     elseif ($ProbeOutput -match '(?i)ESP32-P4') { $Chip = "ESP32-P4" }
     elseif ($ProbeOutput -match '(?i)\bESP32\b') { $Chip = "ESP32" }
 
+    $ChipModel = $Chip
+    if ($ProbeOutput -match '(?im)^Chip type:\s*(.+)$') {
+        $ChipModel = $Matches[1].Trim()
+    }
+
     [pscustomobject]@{
         Port = $CandidatePort
         Chip = $Chip
+        ChipModel = $ChipModel
         ExitCode = $ProbeExitCode
         Output = $ProbeOutput.Trim()
     }
 }
 
-function Resolve-Esp32S3Port([string]$RequestedPort) {
-    Write-Step "Detectando automaticamente el Waveshare ESP32-S3"
+function Get-EspDeviceInventory {
+    Write-Step "Identificando chips Espressif conectados"
 
     $Ports = @([System.IO.Ports.SerialPort]::GetPortNames() | Sort-Object)
     if ($Ports.Count -eq 0) {
@@ -196,55 +204,88 @@ function Resolve-Esp32S3Port([string]$RequestedPort) {
 
     Write-Host "Puertos seriales detectados: $($Ports -join ', ')" -ForegroundColor DarkGray
     Write-Host "Dispositivos visibles para Arduino CLI:" -ForegroundColor DarkGray
-    & $script:ArduinoCli board list
+    & $script:ArduinoCli board list | Out-Host
 
     $Esptool = Find-Esptool
     Write-Host "Identificador de chip: $Esptool" -ForegroundColor DarkGray
 
+    $Inventory = @()
+    foreach ($CandidatePort in $Ports) {
+        Write-Host "Probando $CandidatePort..." -ForegroundColor DarkGray
+        $Inventory += Probe-EspChip -EsptoolPath $Esptool -CandidatePort $CandidatePort
+    }
+
+    return $Inventory
+}
+
+function Write-EspDeviceInventory([object[]]$Inventory) {
+    foreach ($Probe in $Inventory) {
+        if ($Probe.Chip -eq "ESP32-S3") {
+            Write-Host "  $($Probe.Port) -> $($Probe.ChipModel)  [WAVESHARE S3 CANDIDATO]" -ForegroundColor Green
+        }
+        elseif ($Probe.Chip -eq "NO_RESPONSE") {
+            Write-Host "  $($Probe.Port) -> sin respuesta Espressif" -ForegroundColor DarkGray
+        }
+        else {
+            Write-Host "  $($Probe.Port) -> $($Probe.ChipModel)  [INCOMPATIBLE CON ESTE FIRMWARE]" -ForegroundColor Yellow
+        }
+    }
+}
+
+function Show-EspDeviceInventory {
+    $Inventory = @(Get-EspDeviceInventory)
+    Write-EspDeviceInventory -Inventory $Inventory
+
+    $EspressifDevices = @($Inventory | Where-Object { $_.Chip -ne "NO_RESPONSE" })
+    if ($EspressifDevices.Count -eq 0) {
+        Write-Host "No respondio ningun chip Espressif. No se realizo ninguna carga." -ForegroundColor Yellow
+        return
+    }
+
+    $S3Devices = @($EspressifDevices | Where-Object { $_.Chip -eq "ESP32-S3" })
+    if ($S3Devices.Count -eq 0) {
+        Write-Host "No hay un ESP32-S3 conectado. Los equipos mostrados no son compatibles con la pantalla Waveshare 2.16." -ForegroundColor Yellow
+    }
+    else {
+        Write-Host "Se detectaron $($S3Devices.Count) dispositivo(s) ESP32-S3 compatible(s)." -ForegroundColor Green
+    }
+}
+
+function Resolve-Esp32S3Port([string]$RequestedPort) {
+    Write-Step "Preflight: validando el Waveshare ESP32-S3 antes de compilar"
+    $Inventory = @(Get-EspDeviceInventory)
+    Write-EspDeviceInventory -Inventory $Inventory
+
     if ($RequestedPort -and $RequestedPort.ToUpperInvariant() -ne "AUTO") {
         $ExplicitPort = $RequestedPort.ToUpperInvariant()
-        if ($Ports -notcontains $ExplicitPort) {
-            Fail "No existe $ExplicitPort. Puertos detectados: $($Ports -join ', ')"
+        $Probe = $Inventory | Where-Object { $_.Port -eq $ExplicitPort } | Select-Object -First 1
+        if (-not $Probe) {
+            $DetectedPorts = @($Inventory | ForEach-Object { $_.Port })
+            Fail "No existe $ExplicitPort. Puertos detectados: $($DetectedPorts -join ', ')"
         }
 
-        Write-Host "Probando puerto solicitado $ExplicitPort..." -ForegroundColor Cyan
-        $Probe = Probe-EspChip -EsptoolPath $Esptool -CandidatePort $ExplicitPort
-        Write-Host ("  {0} -> {1}" -f $Probe.Port, $Probe.Chip) -ForegroundColor $(if ($Probe.Chip -eq "ESP32-S3") { "Green" } else { "Yellow" })
-
         if ($Probe.Chip -ne "ESP32-S3") {
-            Fail "$ExplicitPort no es un ESP32-S3; se detecto '$($Probe.Chip)'. No se intentara flashear un chip equivocado. Usa -Port AUTO o conecta el Waveshare."
+            Fail "$ExplicitPort no es un ESP32-S3; se detecto '$($Probe.ChipModel)'. El firmware AMOLED usa QSPI, PSRAM y pines exclusivos del modelo S3. No se compilara ni flasheara una imagen incompatible."
         }
 
         return $ExplicitPort
     }
 
-    $Matches = @()
-    foreach ($CandidatePort in $Ports) {
-        Write-Host "Probando $CandidatePort..." -ForegroundColor DarkGray
-        $Probe = Probe-EspChip -EsptoolPath $Esptool -CandidatePort $CandidatePort
-
-        if ($Probe.Chip -eq "ESP32-S3") {
-            Write-Host "  $CandidatePort -> ESP32-S3  [WAVESHARE CANDIDATO]" -ForegroundColor Green
-            $Matches += $CandidatePort
-        }
-        elseif ($Probe.Chip -eq "NO_RESPONSE") {
-            Write-Host "  $CandidatePort -> sin respuesta Espressif" -ForegroundColor DarkGray
-        }
-        else {
-            Write-Host "  $CandidatePort -> $($Probe.Chip)  [ignorado]" -ForegroundColor Yellow
-        }
-    }
+    $Matches = @($Inventory | Where-Object { $_.Chip -eq "ESP32-S3" })
 
     if ($Matches.Count -eq 1) {
-        Write-Host "Puerto ESP32-S3 seleccionado automaticamente: $($Matches[0])" -ForegroundColor Green
-        return $Matches[0]
+        Write-Host "Puerto ESP32-S3 seleccionado automaticamente: $($Matches[0].Port)" -ForegroundColor Green
+        return $Matches[0].Port
     }
 
     if ($Matches.Count -gt 1) {
-        Fail "Se detectaron varios ESP32-S3: $($Matches -join ', '). Ejecuta .\FIX_AND_FLASH.ps1 -Port COMx para elegir uno."
+        $MatchPorts = @($Matches | ForEach-Object { $_.Port })
+        Fail "Se detectaron varios ESP32-S3: $($MatchPorts -join ', '). Ejecuta .\FIX_AND_FLASH.ps1 -Port COMx para elegir uno."
     }
 
-    Fail "No se detecto ningun ESP32-S3. COM9 anteriormente respondio como ESP32 clasico. Desconecta otras placas ESP, conecta el Waveshare ESP32-S3 por USB y vuelve a ejecutar."
+    $OtherDevices = @($Inventory | Where-Object { $_.Chip -ne "NO_RESPONSE" } | ForEach-Object { "$($_.Port)=$($_.ChipModel)" })
+    $DetectedSummary = if ($OtherDevices.Count) { $OtherDevices -join ", " } else { "ningun chip Espressif" }
+    Fail "No se detecto ningun ESP32-S3. Detectado: $DetectedSummary. Un ESP32-D0WD-V3 es ESP32 clasico y no puede ejecutar el firmware de la pantalla Waveshare ESP32-S3-Touch-AMOLED-2.16. No se realizo ninguna carga."
 }
 
 function Test-WaveshareGfxPatch([string]$GfxRoot) {
@@ -383,6 +424,28 @@ function Prepare-SafeSketch([string]$SecretsPath) {
 }
 
 try {
+    Ensure-ArduinoCli
+
+    Write-Step "Actualizando indices oficiales"
+    Run-Cli @("core", "update-index", "--additional-urls", $EspressifIndex)
+    Run-Cli @("lib", "update-index")
+
+    Write-Step "Instalando ESP32 Arduino Core 3.3.11"
+    Run-Cli @("core", "install", $Esp32Core, "--additional-urls", $EspressifIndex)
+
+    if ($IdentifyOnly) {
+        Show-EspDeviceInventory
+        Write-Host "`nIdentifyOnly finalizado: no se compilo ni se cargo firmware." -ForegroundColor Green
+        exit 0
+    }
+
+    if (-not $CompileOnly) {
+        # The physical chip is checked before downloading GFX or compiling. This
+        # prevents wasting time and, more importantly, prevents an S3 image from
+        # ever being sent to a classic ESP32 such as ESP32-D0WD-V3.
+        $ResolvedPort = Resolve-Esp32S3Port -RequestedPort $Port
+    }
+
     Write-Step "Validando credenciales locales"
     $Secrets = Join-Path $Root "secrets.h"
     $SecretsExample = Join-Path $Root "secrets.example.h"
@@ -405,15 +468,6 @@ try {
         Write-Host "Edita SOLO secrets.h; ese archivo esta protegido por .gitignore." -ForegroundColor Yellow
         exit 2
     }
-
-    Ensure-ArduinoCli
-
-    Write-Step "Actualizando indices oficiales"
-    Run-Cli @("core", "update-index", "--additional-urls", $EspressifIndex)
-    Run-Cli @("lib", "update-index")
-
-    Write-Step "Instalando ESP32 Arduino Core 3.3.11"
-    Run-Cli @("core", "install", $Esp32Core, "--additional-urls", $EspressifIndex)
 
     # Do not install GFX from Library Manager. Waveshare's patched copy has the
     # same 1.6.4 version string but contains ESP32 3.3.x compatibility changes.
@@ -448,8 +502,6 @@ try {
         Write-Host "`nCompileOnly activado: no se realizo carga al dispositivo." -ForegroundColor Yellow
         exit 0
     }
-
-    $ResolvedPort = Resolve-Esp32S3Port -RequestedPort $Port
 
     Write-Step "Subiendo firmware al ESP32-S3 en $ResolvedPort"
     Run-Cli @(
