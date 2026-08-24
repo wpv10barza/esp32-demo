@@ -19,10 +19,31 @@ USB-SERIAL CH340 (COM10)
 Chip type: ESP32-D0WD-V3 (revision v3.1)
 ```
 
+El diagnóstico ejecutado en la propia placa lo confirma:
+
+```text
+Chip Model: ESP32-D0WD-V3
+Chip Revision: 301
+CPU Frequency: 240 MHz
+PSRAM: Failed to Initialize or Not Found
+Flash Chip Size configured: 4194304 Bytes (~4 MB)
+```
+
 Ese chip es un **ESP32 clásico**, no el ESP32-S3 de la pantalla
 Waveshare ESP32-S3-Touch-AMOLED-2.16. Por tanto, seleccionar `ESP32 Dev Module`
 o cambiar únicamente el FQBN no es una corrección válida: este sketch necesita
 los pines QSPI, 16 MB de flash y PSRAM OPI del hardware S3.
+
+La ausencia de PSRAM y los 4 MB de flash son características físicas del equipo
+conectado; no pueden convertirse en PSRAM OPI y 16 MB mediante una opción de
+Arduino. El repositorio aplica ahora tres barreras:
+
+1. El lanzador descarta CH340 y exige el USB nativo Espressif del Waveshare.
+2. El sketch genera un error de compilación si el objetivo no es ESP32-S3.
+3. Al arrancar, antes de inicializar QSPI/AMOLED, verifica 16 MB de flash y PSRAM.
+
+GitHub Actions prueba ambos caminos: la compilación ESP32-S3 debe completarse y
+la compilación deliberada para ESP32 clásico debe ser rechazada por la guarda.
 
 Para volver a identificar todas las placas conectadas sin compilar ni cargar:
 

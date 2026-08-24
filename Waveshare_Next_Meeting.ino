@@ -1,4 +1,9 @@
 #include <Arduino.h>
+
+#if !CONFIG_IDF_TARGET_ESP32S3
+#error "WAVESHARE_HARDWARE_GUARD: this firmware requires ESP32-S3; ESP32-D0WD-V3/classic ESP32 is not supported"
+#endif
+
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <WiFiClientSecure.h>
@@ -21,6 +26,48 @@ const char* CALENDAR_URL = CALENDAR_URL_VALUE;
 #define LCD_CS 12
 #define LCD_WIDTH 480
 #define LCD_HEIGHT 480
+
+constexpr uint32_t REQUIRED_FLASH_BYTES = 16UL * 1024UL * 1024UL;
+
+bool validateWaveshareHardware() {
+  const char *chipModel = ESP.getChipModel();
+  const uint32_t flashBytes = ESP.getFlashChipSize();
+  const bool hasPsram = psramFound() && ESP.getPsramSize() > 0;
+
+  Serial.println("\n====================================");
+  Serial.println(" WAVESHARE ESP32-S3 HARDWARE GUARD");
+  Serial.println("====================================");
+  Serial.printf("Chip Model: %s\n", chipModel);
+  Serial.printf("Chip Revision: %u\n", ESP.getChipRevision());
+  Serial.printf("CPU Frequency: %u MHz\n", ESP.getCpuFreqMHz());
+  Serial.printf("Flash Chip Size: %lu Bytes (~%lu MB)\n",
+                static_cast<unsigned long>(flashBytes),
+                static_cast<unsigned long>(flashBytes / (1024UL * 1024UL)));
+  Serial.printf("PSRAM Size: %lu Bytes\n",
+                static_cast<unsigned long>(ESP.getPsramSize()));
+
+  bool compatible = true;
+  if (strcmp(chipModel, "ESP32-S3") != 0) {
+    Serial.println("[X] Chip incompatible: ESP32-S3 requerido.");
+    compatible = false;
+  }
+  if (flashBytes < REQUIRED_FLASH_BYTES) {
+    Serial.println("[X] Flash insuficiente: se requieren 16 MB.");
+    compatible = false;
+  }
+  if (!hasPsram) {
+    Serial.println("[X] PSRAM no disponible: configure PSRAM=opi y use el hardware Waveshare correcto.");
+    compatible = false;
+  }
+
+  if (compatible) {
+    Serial.println("[OK] Hardware Waveshare ESP32-S3 compatible.");
+  } else {
+    Serial.println("[STOP] No se inicializara QSPI, AMOLED, Wi-Fi ni calendario.");
+  }
+  Serial.println("====================================");
+  return compatible;
+}
 
 Arduino_DataBus *bus = new Arduino_ESP32QSPI(
   LCD_CS, LCD_SCLK, LCD_SDIO0, LCD_SDIO1, LCD_SDIO2, LCD_SDIO3);
@@ -196,6 +243,11 @@ void connectWiFi() {
 
 void setup() {
   Serial.begin(115200);
+  delay(250);
+
+  if (!validateWaveshareHardware()) {
+    while (true) delay(1000);
+  }
 
   if (!gfx->begin()) {
     Serial.println("Display init failed");
