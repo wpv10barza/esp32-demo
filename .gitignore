@@ -1,0 +1,19 @@
+# Local secrets - NEVER commit
+secrets.h
+
+# Portable toolchain downloaded by FIX_AND_FLASH.ps1
+.tools/
+
+# Arduino build/output
+build/
+*.bin
+*.elf
+*.map
+
+# OS/editor noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.tmp
+*.log
