@@ -21,7 +21,22 @@ jobs:
         run: |
           $source = Get-Content -LiteralPath ./FIX_AND_FLASH.ps1 -Raw
           $null = [scriptblock]::Create($source)
-          Write-Host "FIX_AND_FLASH.ps1 syntax OK"
+          if ($source -notmatch '\[string\]\$Port\s*=\s*"AUTO"') {
+            throw 'FIX_AND_FLASH.ps1 must default to Port=AUTO'
+          }
+          Write-Host "FIX_AND_FLASH.ps1 syntax/default port OK"
+
+      - name: Validate Windows launchers do not hardcode COM9
+        shell: bash
+        run: |
+          set -euo pipefail
+          if grep -Eqi 'set[[:space:]]+PORT=COM9|-Port[[:space:]]+COM9' RUN_FIX_AND_FLASH.bat PULL_AND_FLASH.bat; then
+            echo 'A Windows launcher still hardcodes COM9' >&2
+            exit 1
+          fi
+          grep -q 'FIX_AND_FLASH.ps1' RUN_FIX_AND_FLASH.bat
+          grep -q 'RUN_FIX_AND_FLASH.bat' PULL_AND_FLASH.bat
+          echo 'Windows launchers default to automatic ESP32-S3 detection'
 
       - name: Install Arduino CLI
         uses: arduino/setup-arduino-cli@v2
