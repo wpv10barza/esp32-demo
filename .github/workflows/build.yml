@@ -19,7 +19,7 @@ jobs:
       - name: Validate Windows PowerShell syntax
         shell: pwsh
         run: |
-          foreach ($file in @('./FIX_AND_FLASH.ps1', './WAVESHARE_USB_BOOT.ps1')) {
+          foreach ($file in @('./FIX_AND_FLASH.ps1', './WAVESHARE_USB_BOOT.ps1', './IDENTIFY_HARDWARE.ps1')) {
             $source = Get-Content -LiteralPath $file -Raw
             $null = [scriptblock]::Create($source)
             Write-Host "$file syntax OK"
@@ -48,7 +48,14 @@ jobs:
             }
           }
 
-          Write-Host "PowerShell syntax, native USB routing and chip preflight OK"
+          $hardwareDiag = Get-Content -LiteralPath ./IDENTIFY_HARDWARE.ps1 -Raw
+          foreach ($required in @('Get-CimInstance', 'VID_303A', 'VID_1A86', 'CH340', 'Bluetooth', 'ESP32-D0WD', 'SPI PSRAM', 'ESP32-S3')) {
+            if (-not $hardwareDiag.Contains($required)) {
+              throw "IDENTIFY_HARDWARE.ps1 is missing required diagnostic rule: $required"
+            }
+          }
+
+          Write-Host "PowerShell syntax, PnP diagnostic, native USB routing and chip preflight OK"
 
       - name: Validate Windows launchers and native USB routing
         shell: bash
@@ -61,15 +68,18 @@ jobs:
           grep -q 'WAVESHARE_USB_BOOT.ps1' RUN_FIX_AND_FLASH.bat
           grep -q 'RUN_FIX_AND_FLASH.bat' PULL_AND_FLASH.bat
           grep -q -- '-IdentifyOnly' IDENTIFY_BOARD.bat
-          grep -q -- '-IdentifyOnly' IDENTIFY_HARDWARE.bat
+          grep -q 'IDENTIFY_HARDWARE.ps1' IDENTIFY_HARDWARE.bat
           grep -q 'esp32:esp32:esp32s3' FIX_AND_FLASH.ps1
           grep -q 'VID_303A' WAVESHARE_USB_BOOT.ps1
           grep -q 'VID_1A86' WAVESHARE_USB_BOOT.ps1
           grep -q 'CONFIG_IDF_TARGET_ESP32S3' Waveshare_Next_Meeting.ino
           grep -q 'WAVESHARE_HARDWARE_GUARD' Waveshare_Next_Meeting.ino
+          grep -q 'REQUIRED_FLASH_BYTES' Waveshare_Next_Meeting.ino
+          grep -q 'REQUIRED_PSRAM_BYTES' Waveshare_Next_Meeting.ino
+          grep -q '8UL \* 1024UL \* 1024UL' Waveshare_Next_Meeting.ino
           grep -q 'getFlashChipSize' Waveshare_Next_Meeting.ino
           grep -q 'psramFound' Waveshare_Next_Meeting.ino
-          echo 'Windows launchers use native USB detection and preserve the ESP32-S3 target'
+          echo 'Windows launchers use native USB detection and preserve the exact ESP32-S3R8 target'
 
       - name: Validate Waveshare hardware profile
         shell: bash
@@ -80,9 +90,11 @@ jobs:
           grep -q '16 MB' HARDWARE_PROFILE.md
           grep -q 'ESP32-D0WD-V3' HARDWARE_PROFILE.md
           grep -q 'USB-SERIAL CH340' HARDWARE_PROFILE.md
+          grep -q 'external SPI PSRAM' HARDWARE_PROFILE.md
+          grep -q 'OPI PSRAM' HARDWARE_PROFILE.md
           grep -q 'must never be treated as an ESP32-S3 target' HARDWARE_PROFILE.md
           grep -q 'FlashSize=16M,PSRAM=opi' HARDWARE_PROFILE.md
-          echo 'Hardware profile rejects classic ESP32/CH340 and preserves S3R8 requirements'
+          echo 'Hardware profile rejects classic ESP32/CH340 without overstating classic ESP32 PSRAM capabilities'
 
       - name: Install Arduino CLI
         uses: arduino/setup-arduino-cli@v2
