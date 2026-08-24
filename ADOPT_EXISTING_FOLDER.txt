@@ -1,0 +1,23 @@
+PRIMERA VINCULACION DE TU CARPETA ACTUAL CON GITHUB
+====================================================
+
+IMPORTANTE:
+- El repositorio remoto esperado es:
+  https://github.com/wpv10barza/esp32-demo.git
+- Tus secretos se guardaran en secrets.h, que Git NO sube.
+- Antes de ejecutar los comandos, crea/edita secrets.h con tus valores locales.
+
+Desde PowerShell, dentro de:
+D:\118102025\Downloads\Waveshare_Next_Meeting(1)\Waveshare_Next_Meeting
+
+ejecuta:
+
+git init
+git branch -M main
+git remote remove origin 2>$null
+git remote add origin https://github.com/wpv10barza/esp32-demo.git
+git fetch origin
+git reset --hard origin/main
+
+Después crea secrets.h copiando secrets.example.h y coloca ahí tus 3 valores.
+A partir de entonces usa PULL_AND_FLASH.bat para actualizar y cargar.
