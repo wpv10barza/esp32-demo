@@ -16,17 +16,28 @@ jobs:
       - name: Checkout project
         uses: actions/checkout@v4
 
-      - name: Validate Windows flasher PowerShell syntax
+      - name: Validate Windows PowerShell syntax
         shell: pwsh
         run: |
-          $source = Get-Content -LiteralPath ./FIX_AND_FLASH.ps1 -Raw
-          $null = [scriptblock]::Create($source)
-          if ($source -notmatch '\[string\]\$Port\s*=\s*"AUTO"') {
+          foreach ($file in @('./FIX_AND_FLASH.ps1', './WAVESHARE_USB_BOOT.ps1')) {
+            $source = Get-Content -LiteralPath $file -Raw
+            $null = [scriptblock]::Create($source)
+            Write-Host "$file syntax OK"
+          }
+
+          $flasher = Get-Content -LiteralPath ./FIX_AND_FLASH.ps1 -Raw
+          if ($flasher -notmatch '\[string\]\$Port\s*=\s*"AUTO"') {
             throw 'FIX_AND_FLASH.ps1 must default to Port=AUTO'
           }
-          Write-Host "FIX_AND_FLASH.ps1 syntax/default port OK"
 
-      - name: Validate Windows launchers do not hardcode COM9
+          $usbHelper = Get-Content -LiteralPath ./WAVESHARE_USB_BOOT.ps1 -Raw
+          foreach ($required in @('VID_303A', 'CH340', 'Bluetooth', 'BOOT', 'FIX_AND_FLASH.ps1')) {
+            if (-not $usbHelper.Contains($required)) {
+              throw "WAVESHARE_USB_BOOT.ps1 is missing required guard: $required"
+            }
+          }
+
+      - name: Validate Windows launchers and native USB routing
         shell: bash
         run: |
           set -euo pipefail
@@ -34,9 +45,11 @@ jobs:
             echo 'A Windows launcher still hardcodes COM9' >&2
             exit 1
           fi
-          grep -q 'FIX_AND_FLASH.ps1' RUN_FIX_AND_FLASH.bat
+          grep -q 'WAVESHARE_USB_BOOT.ps1' RUN_FIX_AND_FLASH.bat
           grep -q 'RUN_FIX_AND_FLASH.bat' PULL_AND_FLASH.bat
-          echo 'Windows launchers default to automatic ESP32-S3 detection'
+          grep -q 'VID_303A' WAVESHARE_USB_BOOT.ps1
+          grep -q 'VID_1A86' WAVESHARE_USB_BOOT.ps1
+          echo 'Windows launcher routes through Waveshare native USB detection'
 
       - name: Install Arduino CLI
         uses: arduino/setup-arduino-cli@v2
