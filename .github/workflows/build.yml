@@ -16,6 +16,13 @@ jobs:
       - name: Checkout project
         uses: actions/checkout@v4
 
+      - name: Validate Windows flasher PowerShell syntax
+        shell: pwsh
+        run: |
+          $source = Get-Content -LiteralPath ./FIX_AND_FLASH.ps1 -Raw
+          $null = [scriptblock]::Create($source)
+          Write-Host "FIX_AND_FLASH.ps1 syntax OK"
+
       - name: Install Arduino CLI
         uses: arduino/setup-arduino-cli@v2
 
