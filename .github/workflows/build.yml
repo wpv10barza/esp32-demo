@@ -1,0 +1,65 @@
+name: Build ESP32-S3 firmware
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+
+      - name: Install Arduino CLI
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install ESP32 Arduino core 3.3.11
+        run: |
+          arduino-cli config init --overwrite
+          arduino-cli config add board_manager.additional_urls https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32@3.3.11
+
+      - name: Download pinned Waveshare patched GFX
+        shell: bash
+        env:
+          WAVESHARE_SHA: 225a62bff11b5d0a0b607873860d39485a9a9685
+        run: |
+          set -euo pipefail
+          curl -fL "https://github.com/waveshareteam/ESP32-S3-Touch-AMOLED-2.16/archive/${WAVESHARE_SHA}.zip" -o /tmp/waveshare.zip
+          mkdir -p /tmp/waveshare
+          unzip -q /tmp/waveshare.zip -d /tmp/waveshare
+          GFX_DIR="$(find /tmp/waveshare -type d -path '*/examples/arduino/libraries/GFX_Library_for_Arduino' -print -quit)"
+          test -n "$GFX_DIR"
+          grep -q 'gfxSpiFrequencyToClockDiv' "$GFX_DIR/src/databus/Arduino_ESP32SPI.cpp"
+          grep -q 'spiFrequencyToClockDiv(spi, freq)' "$GFX_DIR/src/databus/Arduino_ESP32SPI.cpp"
+          echo "GFX_DIR=$GFX_DIR" >> "$GITHUB_ENV"
+
+      - name: Stage sketch with non-secret CI values
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/Waveshare_Next_Meeting
+          mkdir -p /tmp/Waveshare_Next_Meeting
+          cp Waveshare_Next_Meeting.ino /tmp/Waveshare_Next_Meeting/Waveshare_Next_Meeting.ino
+          cat > /tmp/Waveshare_Next_Meeting/secrets.h <<'EOF'
+          #pragma once
+          #define WIFI_SSID_VALUE "CI_WIFI"
+          #define WIFI_PASSWORD_VALUE "CI_PASSWORD"
+          #define CALENDAR_URL_VALUE "https://example.invalid/exec"
+          EOF
+
+      - name: Compile firmware
+        run: |
+          arduino-cli compile \
+            --fqbn esp32:esp32:esp32s3 \
+            --board-options CDCOnBoot=cdc,FlashSize=16M,PSRAM=opi \
+            --library "$GFX_DIR" \
+            --warnings all \
+            /tmp/Waveshare_Next_Meeting
