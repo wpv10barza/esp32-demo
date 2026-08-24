@@ -52,3 +52,7 @@ IDENTIFY_BOARD.bat
 Neither command flashes firmware.
 
 If Windows only shows Bluetooth COM ports plus `USB-SERIAL CH340`, connect the Waveshare through its own USB-C **data** port. If necessary, disconnect it, hold **BOOT**, reconnect USB-C while holding BOOT, then release BOOT. A native Espressif USB/JTAG/serial device should enumerate before this firmware is flashed.
+
+## CI verification
+
+GitHub Actions verifies this hardware guard together with PowerShell syntax, native-USB routing, the ESP32-S3-only target, Waveshare's patched GFX library, and a real firmware compilation before this verification change is merged.
