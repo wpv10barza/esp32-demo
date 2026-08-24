@@ -27,13 +27,13 @@ Credentials are **not committed**.
 
 ## Fastest Windows workflow
 
-Connect the board by USB. The default port is `COM9`.
-
-Run:
+Connect the Waveshare board by USB and run:
 
 ```text
 RUN_FIX_AND_FLASH.bat
 ```
+
+The default serial-port mode is now **AUTO**. Before flashing, the script safely probes all visible COM ports with Espressif `esptool chip-id`, selects the single port that identifies itself as **ESP32-S3**, and refuses to flash ESP32, ESP32-C3, or other chips by mistake.
 
 The PowerShell automation:
 
@@ -45,18 +45,21 @@ The PowerShell automation:
 - builds from a safe temporary path without parentheses, avoiding ESP32 Windows `cmd.exe` recipe failures;
 - compiles for `esp32:esp32:esp32s3`;
 - uses `CDCOnBoot=cdc,FlashSize=16M,PSRAM=opi`;
-- verifies the COM port;
+- auto-detects the real ESP32-S3 serial port before upload;
+- refuses to flash a port that identifies as another ESP32 family chip;
 - stops on the first real error;
 - uploads only after a successful compile;
 - removes the temporary sketch containing `secrets.h` after success or failure.
 
 The globally installed Arduino libraries are not modified.
 
-If the board is not on COM9:
+To force a specific port instead of AUTO:
 
 ```powershell
-.\FIX_AND_FLASH.ps1 -Port COM10
+.\FIX_AND_FLASH.ps1 -Port COM8
 ```
+
+The explicit port is still verified as an ESP32-S3 before flashing.
 
 Compile without uploading:
 
