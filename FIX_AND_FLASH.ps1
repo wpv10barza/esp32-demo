@@ -1,5 +1,5 @@
 param(
-    [string]$Port = "COM9",
+    [string]$Port = "AUTO",
     [switch]$CompileOnly
 )
 
@@ -121,6 +121,130 @@ function Ensure-ArduinoCli {
 
     Write-Host "Arduino CLI portable listo: $script:ArduinoCli" -ForegroundColor Green
     Run-Cli @("version")
+}
+
+function Find-Esptool {
+    $SearchRoots = @()
+
+    if ($env:LOCALAPPDATA) {
+        $SearchRoots += (Join-Path $env:LOCALAPPDATA "Arduino15\packages\esp32\tools\esptool_py")
+    }
+    if ($env:USERPROFILE) {
+        $SearchRoots += (Join-Path $env:USERPROFILE ".arduino15\packages\esp32\tools\esptool_py")
+    }
+
+    foreach ($SearchRoot in $SearchRoots) {
+        if (-not (Test-Path $SearchRoot)) { continue }
+
+        $VersionDirs = Get-ChildItem -LiteralPath $SearchRoot -Directory | Sort-Object LastWriteTime -Descending
+        foreach ($VersionDir in $VersionDirs) {
+            $Exe = Join-Path $VersionDir.FullName "esptool.exe"
+            if (Test-Path $Exe) {
+                return $Exe
+            }
+        }
+    }
+
+    Fail "No se encontro esptool.exe instalado por ESP32 Arduino Core."
+}
+
+function Probe-EspChip([string]$EsptoolPath, [string]$CandidatePort) {
+    $ProbeOutput = ""
+    $ProbeExitCode = -1
+    $PreviousPreference = $ErrorActionPreference
+
+    try {
+        # A failed probe is expected for non-Espressif serial devices, so capture
+        # its output instead of treating it as a PowerShell exception.
+        $ErrorActionPreference = "Continue"
+        $ProbeOutput = (& $EsptoolPath "--port" $CandidatePort "--connect-attempts" "1" "--after" "hard-reset" "chip-id" 2>&1 | Out-String)
+        $ProbeExitCode = $LASTEXITCODE
+    }
+    catch {
+        $ProbeOutput = $_.Exception.Message
+        $ProbeExitCode = -1
+    }
+    finally {
+        $ErrorActionPreference = $PreviousPreference
+    }
+
+    $Chip = "NO_RESPONSE"
+    if ($ProbeOutput -match '(?i)ESP32-S3') { $Chip = "ESP32-S3" }
+    elseif ($ProbeOutput -match '(?i)ESP32-S2') { $Chip = "ESP32-S2" }
+    elseif ($ProbeOutput -match '(?i)ESP32-C3') { $Chip = "ESP32-C3" }
+    elseif ($ProbeOutput -match '(?i)ESP32-C5') { $Chip = "ESP32-C5" }
+    elseif ($ProbeOutput -match '(?i)ESP32-C6') { $Chip = "ESP32-C6" }
+    elseif ($ProbeOutput -match '(?i)ESP32-H2') { $Chip = "ESP32-H2" }
+    elseif ($ProbeOutput -match '(?i)ESP32-P4') { $Chip = "ESP32-P4" }
+    elseif ($ProbeOutput -match '(?i)\bESP32\b') { $Chip = "ESP32" }
+
+    [pscustomobject]@{
+        Port = $CandidatePort
+        Chip = $Chip
+        ExitCode = $ProbeExitCode
+        Output = $ProbeOutput.Trim()
+    }
+}
+
+function Resolve-Esp32S3Port([string]$RequestedPort) {
+    Write-Step "Detectando automaticamente el Waveshare ESP32-S3"
+
+    $Ports = @([System.IO.Ports.SerialPort]::GetPortNames() | Sort-Object)
+    if ($Ports.Count -eq 0) {
+        Fail "No se detectaron puertos COM. Conecta el Waveshare por USB y vuelve a ejecutar."
+    }
+
+    Write-Host "Puertos seriales detectados: $($Ports -join ', ')" -ForegroundColor DarkGray
+    Write-Host "Dispositivos visibles para Arduino CLI:" -ForegroundColor DarkGray
+    & $script:ArduinoCli board list
+
+    $Esptool = Find-Esptool
+    Write-Host "Identificador de chip: $Esptool" -ForegroundColor DarkGray
+
+    if ($RequestedPort -and $RequestedPort.ToUpperInvariant() -ne "AUTO") {
+        $ExplicitPort = $RequestedPort.ToUpperInvariant()
+        if ($Ports -notcontains $ExplicitPort) {
+            Fail "No existe $ExplicitPort. Puertos detectados: $($Ports -join ', ')"
+        }
+
+        Write-Host "Probando puerto solicitado $ExplicitPort..." -ForegroundColor Cyan
+        $Probe = Probe-EspChip -EsptoolPath $Esptool -CandidatePort $ExplicitPort
+        Write-Host ("  {0} -> {1}" -f $Probe.Port, $Probe.Chip) -ForegroundColor $(if ($Probe.Chip -eq "ESP32-S3") { "Green" } else { "Yellow" })
+
+        if ($Probe.Chip -ne "ESP32-S3") {
+            Fail "$ExplicitPort no es un ESP32-S3; se detecto '$($Probe.Chip)'. No se intentara flashear un chip equivocado. Usa -Port AUTO o conecta el Waveshare."
+        }
+
+        return $ExplicitPort
+    }
+
+    $Matches = @()
+    foreach ($CandidatePort in $Ports) {
+        Write-Host "Probando $CandidatePort..." -ForegroundColor DarkGray
+        $Probe = Probe-EspChip -EsptoolPath $Esptool -CandidatePort $CandidatePort
+
+        if ($Probe.Chip -eq "ESP32-S3") {
+            Write-Host "  $CandidatePort -> ESP32-S3  [WAVESHARE CANDIDATO]" -ForegroundColor Green
+            $Matches += $CandidatePort
+        }
+        elseif ($Probe.Chip -eq "NO_RESPONSE") {
+            Write-Host "  $CandidatePort -> sin respuesta Espressif" -ForegroundColor DarkGray
+        }
+        else {
+            Write-Host "  $CandidatePort -> $($Probe.Chip)  [ignorado]" -ForegroundColor Yellow
+        }
+    }
+
+    if ($Matches.Count -eq 1) {
+        Write-Host "Puerto ESP32-S3 seleccionado automaticamente: $($Matches[0])" -ForegroundColor Green
+        return $Matches[0]
+    }
+
+    if ($Matches.Count -gt 1) {
+        Fail "Se detectaron varios ESP32-S3: $($Matches -join ', '). Ejecuta .\FIX_AND_FLASH.ps1 -Port COMx para elegir uno."
+    }
+
+    Fail "No se detecto ningun ESP32-S3. COM9 anteriormente respondio como ESP32 clasico. Desconecta otras placas ESP, conecta el Waveshare ESP32-S3 por USB y vuelve a ejecutar."
 }
 
 function Test-WaveshareGfxPatch([string]$GfxRoot) {
@@ -325,20 +449,12 @@ try {
         exit 0
     }
 
-    Write-Step "Comprobando puerto $Port"
-    $Ports = [System.IO.Ports.SerialPort]::GetPortNames() | Sort-Object
-    if ($Ports -notcontains $Port) {
-        Write-Host "Puertos detectados: $($Ports -join ', ')" -ForegroundColor Yellow
-        Fail "No existe $Port. Conecta la placa o ejecuta: .\FIX_AND_FLASH.ps1 -Port COMx"
-    }
+    $ResolvedPort = Resolve-Esp32S3Port -RequestedPort $Port
 
-    Write-Host "Dispositivos visibles para Arduino CLI:" -ForegroundColor DarkGray
-    & $script:ArduinoCli board list
-
-    Write-Step "Subiendo firmware a $Port"
+    Write-Step "Subiendo firmware al ESP32-S3 en $ResolvedPort"
     Run-Cli @(
         "upload",
-        "-p", $Port,
+        "-p", $ResolvedPort,
         "--fqbn", $Fqbn,
         "--board-options", $BoardOptions,
         "--build-path", $BuildPath,
@@ -348,6 +464,7 @@ try {
     Write-Host "`n============================================" -ForegroundColor Green
     Write-Host " EXITO REAL: compilacion y carga completadas " -ForegroundColor Green
     Write-Host "============================================" -ForegroundColor Green
+    Write-Host "ESP32-S3 cargado por: $ResolvedPort" -ForegroundColor Green
     exit 0
 }
 catch {
