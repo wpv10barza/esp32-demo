@@ -28,11 +28,13 @@ const char* CALENDAR_URL = CALENDAR_URL_VALUE;
 #define LCD_HEIGHT 480
 
 constexpr uint32_t REQUIRED_FLASH_BYTES = 16UL * 1024UL * 1024UL;
+constexpr uint32_t REQUIRED_PSRAM_BYTES = 8UL * 1024UL * 1024UL;
 
 bool validateWaveshareHardware() {
   const char *chipModel = ESP.getChipModel();
   const uint32_t flashBytes = ESP.getFlashChipSize();
-  const bool hasPsram = psramFound() && ESP.getPsramSize() > 0;
+  const uint32_t psramBytes = ESP.getPsramSize();
+  const bool psramInitialized = psramFound();
 
   Serial.println("\n====================================");
   Serial.println(" WAVESHARE ESP32-S3 HARDWARE GUARD");
@@ -43,8 +45,10 @@ bool validateWaveshareHardware() {
   Serial.printf("Flash Chip Size: %lu Bytes (~%lu MB)\n",
                 static_cast<unsigned long>(flashBytes),
                 static_cast<unsigned long>(flashBytes / (1024UL * 1024UL)));
-  Serial.printf("PSRAM Size: %lu Bytes\n",
-                static_cast<unsigned long>(ESP.getPsramSize()));
+  Serial.printf("PSRAM Size: %lu Bytes (~%lu MB)\n",
+                static_cast<unsigned long>(psramBytes),
+                static_cast<unsigned long>(psramBytes / (1024UL * 1024UL)));
+  Serial.println("Expected board profile: ESP32-S3 + 16 MB flash + 8 MB OPI PSRAM");
 
   bool compatible = true;
   if (strcmp(chipModel, "ESP32-S3") != 0) {
@@ -52,11 +56,14 @@ bool validateWaveshareHardware() {
     compatible = false;
   }
   if (flashBytes < REQUIRED_FLASH_BYTES) {
-    Serial.println("[X] Flash insuficiente: se requieren 16 MB.");
+    Serial.println("[X] Flash insuficiente: se requieren 16 MB para el perfil Waveshare.");
     compatible = false;
   }
-  if (!hasPsram) {
-    Serial.println("[X] PSRAM no disponible: configure PSRAM=opi y use el hardware Waveshare correcto.");
+  if (!psramInitialized) {
+    Serial.println("[X] PSRAM no inicializada: use PSRAM=opi y el hardware Waveshare ESP32-S3 correcto.");
+    compatible = false;
+  } else if (psramBytes < REQUIRED_PSRAM_BYTES) {
+    Serial.println("[X] PSRAM insuficiente: el perfil ESP32-S3R8 de esta placa espera 8 MB.");
     compatible = false;
   }
 
